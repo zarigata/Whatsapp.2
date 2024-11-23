@@ -5,7 +5,7 @@ import { Ollama } from 'ollama'; // Import Ollama class
 const { Client, LocalAuth } = pkg; // Destructure Client and LocalAuth from the imported package
 
 // Initialize Ollama with the correct host
-const ollama = new Ollama({ host: 'http://192.168.15.115:11434' }); // Ollama server URL
+const ollama = new Ollama({ host: 'http://127.0.0.1:11434' }); // Ollama server URL
 
 // Initialize the WhatsApp client with session persistence
 const client = new Client({
@@ -30,13 +30,19 @@ const chatHistory = {};
 client.on('message', async (message) => {
     const chatId = message.from;
     const text = message.body;
-    const isGroup = message.from.startsWith('g'); // Check if the message is from a group
+    const isGroup = chatId.includes('@g.us'); // Ensure this is a group chat
     
     // Check if the message contains a mention of the bot
-    const isMentioned = message.mentions && message.mentions.some(mention => mention.id === client.info.wid._serialized);
+    const isMentioned = message.mentionedIds && message.mentionedIds.includes(client.info.wid._serialized);
+
+    // Debugging: Log the message and mentions array to help troubleshoot
+    console.log('Message:', message);
+    console.log('Mentions:', message.mentionedIds);
+    console.log('Group Mentions:', message.groupMentions);
 
     // If the message is from a group and the bot is not mentioned, do not reply
     if (isGroup && !isMentioned) {
+        console.log('Bot not mentioned in group, ignoring message.');
         return; // Do nothing
     }
 
@@ -55,7 +61,7 @@ client.on('message', async (message) => {
 
     // Prepare payload for Ollama
     const payload = {
-        model: 'ingles', // Replace with your specific Ollama model
+        model: 'wizard-vicuna-uncensored', // Replace with your specific Ollama model
         messages: chatHistory[chatId],
     };
 
