@@ -10,29 +10,6 @@ import { exec } from 'child_process';
 // Ensure __dirname is interpreted correctly for ES modules
 const __dirname = new URL('.', import.meta.url).pathname;
 
-// Correct directory path for saving audio files
-const audioDir = path.join(__dirname, 'audio_files');
-
-// Check if the folder exists, and if not, run the Python script to create it
-if (!fs.existsSync(audioDir)) {
-    console.log('Audio directory does not exist, calling Python script to create it...');
-    
-    // Call the Python script to handle folder creation
-    exec('python create_audio_folder.py', (error, stdout, stderr) => {
-        if (error) {
-            console.error(`Error executing Python script: ${error}`);
-            return;
-        }
-        if (stderr) {
-            console.error(`stderr: ${stderr}`);
-            return;
-        }
-        console.log(`stdout: ${stdout}`);
-    });
-} else {
-    console.log('Audio directory already exists.');
-}
-
 // Initialize Ollama with the correct host
 const ollama = new Ollama({ host: 'http://127.0.0.1:11434' }); // Ollama server URL
 
@@ -84,16 +61,14 @@ client.on('message', async (message) => {
     if (message.hasMedia && message.type === 'ptt') {
         try {
             const media = await message.downloadMedia();
-            const audioFilePath = path.join(audioDir, 'temp_audio.wav');
-            
-            // Save the audio file locally
-            fs.writeFileSync(audioFilePath, media.data, 'base64');
-            console.log('Audio file saved, sending to transcription server...');
+            const audioBuffer = Buffer.from(media.data, 'base64');  // Convert audio to buffer
 
-            // Send the audio file to the Python server for transcription
+            console.log('Audio buffer ready, sending to transcription server...');
+
+            // Send the audio buffer directly to the Python server for transcription
             const response = await fetch('http://127.0.0.1:5000/transcribe', {
                 method: 'POST',
-                body: fs.createReadStream(audioFilePath),
+                body: audioBuffer,  // Send audio buffer as body
                 headers: {
                     'Content-Type': 'audio/wav',
                 },
@@ -125,9 +100,6 @@ client.on('message', async (message) => {
                 console.error('Error transcribing audio:', result.error);
                 client.sendMessage(chatId, 'Sorry, I could not transcribe the audio.');
             }
-
-            // Cleanup temp audio file
-            fs.unlinkSync(audioFilePath);
         } catch (error) {
             console.error('Error handling voice message:', error);
             message.reply('An error occurred while processing the voice message.');
