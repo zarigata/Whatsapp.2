@@ -1,22 +1,36 @@
 import pkg from 'whatsapp-web.js';  // Import as default
+const { Client, LocalAuth } = pkg;  // Destructure the required exports
 import qrcode from 'qrcode-terminal';
 import { Ollama } from 'ollama'; // Import Ollama class
 import fetch from 'node-fetch'; // For sending audio to Python server
 import fs from 'fs';
 import path from 'path';
+import { exec } from 'child_process';
 
 // Ensure __dirname is interpreted correctly for ES modules
 const __dirname = new URL('.', import.meta.url).pathname;
 
-const { Client, LocalAuth } = pkg; // Destructure Client and LocalAuth from the imported package
-
 // Correct directory path for saving audio files
 const audioDir = path.join(__dirname, 'audio_files');
-const parentDir = path.dirname(audioDir);
 
-// Check and create the audio directory
-if (!fs.existsSync(parentDir)) {
-    fs.mkdirSync(parentDir, { recursive: true });
+// Check if the folder exists, and if not, run the Python script to create it
+if (!fs.existsSync(audioDir)) {
+    console.log('Audio directory does not exist, calling Python script to create it...');
+    
+    // Call the Python script to handle folder creation
+    exec('python create_audio_folder.py', (error, stdout, stderr) => {
+        if (error) {
+            console.error(`Error executing Python script: ${error}`);
+            return;
+        }
+        if (stderr) {
+            console.error(`stderr: ${stderr}`);
+            return;
+        }
+        console.log(`stdout: ${stdout}`);
+    });
+} else {
+    console.log('Audio directory already exists.');
 }
 
 // Initialize Ollama with the correct host
