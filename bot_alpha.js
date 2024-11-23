@@ -1,116 +1,83 @@
-import pkg from 'whatsapp-web.js'; // Import as default
-import qrcode from 'qrcode-terminal';
-import { Ollama } from 'ollama'; // Import Ollama class
+import { Client, LocalAuth } from 'whatsapp-web.js';
 import fs from 'fs';
+import { exec } from 'child_process';
 import path from 'path';
-import { exec } from 'child_process'; // For calling Python script
+import { Ollama } from 'ollama';
 
-const { Client, LocalAuth } = pkg; // Destructure Client and LocalAuth from the imported package
-
-// Initialize Ollama with the correct host
-const ollama = new Ollama({ host: 'http://127.0.0.1:11434' }); // Ollama server URL
-
-// Initialize the WhatsApp client with session persistence
+// Initialize WhatsApp client
 const client = new Client({
-    authStrategy: new LocalAuth({ dataPath: './session' }) // Saves session
+  authStrategy: new LocalAuth(),
 });
 
-// Listen for QR code
-client.on('qr', (qr) => {
-    console.log('Scan the QR Code below to log in:');
-    qrcode.generate(qr, { small: true });
-});
+// Store message history (you can tweak the size based on your needs)
+let messageHistory = [];
 
-// Notify when logged in
-client.on('ready', () => {
-    console.log('WhatsApp Bot is ready!');
-});
+// Ollama client for AI interactions (using your provided host and model)
+const ollama = new Ollama({ host: 'http://192.168.15.115:11434' });
 
-// Handle incoming messages
 client.on('message', async (message) => {
-    const chatId = message.from;
-    const text = message.body;
-    const isGroup = chatId.includes('@g.us'); // Ensure this is a group chat
-    
-    // Check if the message contains a mention of the bot
-    const isMentioned = message.mentionedIds && message.mentionedIds.includes(client.info.wid._serialized);
+  // Check if the message is a voice message
+  if (message.hasMedia) {
+    // Download the media
+    const media = await message.downloadMedia();
+    const fileName = `voice_message_${message.id.id}.ogg`; // Save as OGG file
+    const filePath = path.join(__dirname, fileName);
 
-    // If the message is from a group and the bot is not mentioned, do not reply
-    if (isGroup && !isMentioned) {
-        console.log('Bot not mentioned in group, ignoring message.');
-        return; // Do nothing
+    // Write the media file to disk
+    fs.writeFileSync(filePath, media.data, 'base64');
+
+    console.log(`Received a voice message, saved as ${fileName}`);
+
+    // Call Python script to transcribe the audio
+    exec(`python transcribe_audio.py ${filePath}`, async (err, stdout, stderr) => {
+      if (err) {
+        console.error(`Error: ${stderr}`);
+        message.reply("Sorry, I couldn't process the voice message.");
+        return;
+      }
+
+      console.log(`Transcription result: ${stdout}`);
+      const transcription = stdout.trim();
+
+      // Add the transcription to the message history
+      messageHistory.push({ role: 'user', content: transcription });
+
+      // Limit history to last 5 messages
+      if (messageHistory.length > 5) {
+        messageHistory.shift();
+      }
+
+      // Send the complete history to Ollama for context-based reply
+      const response = await ollama.chat({
+        model: 'vera',  // Use the model "vera"
+        messages: messageHistory,
+      });
+
+      // Reply with the response from Ollama
+      message.reply(response.message.content);
+    });
+  } else {
+    // Regular text message handling
+    messageHistory.push({ role: 'user', content: message.body });
+
+    // Limit history to last 5 messages
+    if (messageHistory.length > 5) {
+      messageHistory.shift();
     }
 
-    // Handle audio messages
-    if (message.hasMedia && message.type === 'audio') {
-        // Download the audio
-        const media = await message.downloadMedia();
-        const audioFilePath = path.join(__dirname, 'audio_message.ogg');
-        fs.writeFileSync(audioFilePath, media.data, 'base64');
+    // Send the complete history to Ollama for context-based reply
+    const response = await ollama.chat({
+      model: 'vera',  // Use the model "vera"
+      messages: messageHistory,
+    });
 
-        // Convert audio to text using an external Python script
-        const transcribedText = await transcribeAudioToText(audioFilePath);
-
-        // If transcription was successful, send it to Ollama for a response
-        if (transcribedText) {
-            const payload = {
-                model: 'llama3.1', // Replace with your specific Ollama model
-                messages: [{ role: 'user', content: transcribedText }],
-            };
-
-            try {
-                // Send request to Ollama server using Ollama's API
-                const response = await ollama.chat(payload);
-                
-                // Extract the bot's reply
-                const botReply = response.message.content || 'Sorry, I could not process your request.';
-                
-                // Send the bot's reply back to WhatsApp
-                client.sendMessage(chatId, botReply);
-            } catch (error) {
-                console.error('Error communicating with the Ollama server:', error.message);
-                client.sendMessage(chatId, 'Oops! There was an error processing your request.');
-            }
-        }
-    } else {
-        // If it's not an audio message, handle it as a regular text message
-        const payload = {
-            model: 'llama3.1',
-            messages: [{ role: 'user', content: text }],
-        };
-
-        try {
-            const response = await ollama.chat(payload);
-            const botReply = response.message.content || 'Sorry, I could not process your request.';
-            client.sendMessage(chatId, botReply);
-        } catch (error) {
-            console.error('Error communicating with the Ollama server:', error.message);
-            client.sendMessage(chatId, 'Oops! There was an error processing your request.');
-        }
-    }
+    // Reply with the response from Ollama
+    message.reply(response.message.content);
+  }
 });
 
-// Function to transcribe audio to text using an external Python script
-async function transcribeAudioToText(audioFilePath) {
-    return new Promise((resolve, reject) => {
-        const pythonScriptPath = path.join(__dirname, 'transcribe_audio.py'); // Path to your Python script
+client.on('ready', () => {
+  console.log('WhatsApp bot is ready!');
+});
 
-        // Call the Python script and pass the audio file path
-        exec(`python ${pythonScriptPath} "${audioFilePath}"`, (error, stdout, stderr) => {
-            if (error) {
-                console.error('Error executing Python script:', error);
-                reject(error);
-            }
-            if (stderr) {
-                console.error('Python script stderr:', stderr);
-                reject(stderr);
-            }
-
-            // Return the transcribed text
-            resolve(stdout.trim());
-        });
-    });
-}
-
-// Start the WhatsApp client
 client.initialize();
