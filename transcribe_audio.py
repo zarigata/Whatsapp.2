@@ -1,7 +1,6 @@
 import sys
 import speech_recognition as sr
 from pydub import AudioSegment
-import os
 
 # Convert OGG to WAV if needed (because SpeechRecognition works best with WAV files)
 def convert_ogg_to_wav(ogg_path):
