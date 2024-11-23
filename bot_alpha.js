@@ -63,43 +63,68 @@ client.on('message', async (message) => {
             const media = await message.downloadMedia();
             const audioBuffer = Buffer.from(media.data, 'base64');  // Convert audio to buffer
 
-            console.log('Audio buffer ready, sending to transcription server...');
+            console.log('Audio buffer ready, converting and sending to transcription server...');
 
-            // Send the audio buffer directly to the Python server for transcription
-            const response = await fetch('http://127.0.0.1:5000/transcribe', {
-                method: 'POST',
-                body: audioBuffer,  // Send audio buffer as body
-                headers: {
-                    'Content-Type': 'audio/wav',
-                },
+            // Convert the audio buffer (if needed)
+            const tempFilePath = path.join(__dirname, 'temp_audio.wav');
+            fs.writeFileSync(tempFilePath, audioBuffer);
+
+            // Convert WAV to MP3 using ffmpeg (if your server expects MP3)
+            const mp3FilePath = path.join(__dirname, 'temp_audio.mp3');
+            exec(`ffmpeg -i ${tempFilePath} -q:a 0 -map a ${mp3FilePath}`, (err, stdout, stderr) => {
+                if (err) {
+                    console.error('Error converting WAV to MP3:', err);
+                    message.reply('Error processing the voice message.');
+                    return;
+                }
+
+                console.log('Conversion successful, sending to transcription server...');
+
+                // Send the converted audio file (MP3 or WAV) to the Python server
+                fetch('http://127.0.0.1:5000/transcribe', {
+                    method: 'POST',
+                    body: fs.createReadStream(mp3FilePath),  // Use the MP3 file
+                    headers: {
+                        'Content-Type': 'audio/mp3',
+                    },
+                })
+                .then(async (response) => {
+                    const result = await response.json();
+                    if (response.ok) {
+                        const transcription = result.transcription || 'Sorry, I could not transcribe the audio.';
+                        console.log('Transcription:', transcription);
+                        
+                        // Add the transcription to chat history
+                        chatHistory[chatId].push({ role: 'user', content: transcription });
+
+                        // Prepare payload for Ollama
+                        const payload = {
+                            model: 'llama3.1', // Replace with your specific Ollama model
+                            messages: chatHistory[chatId],
+                        };
+
+                        // Send transcription to Ollama for response
+                        const ollamaResponse = await ollama.chat(payload);
+
+                        const botReply = ollamaResponse.message.content || 'Sorry, I could not process your request.';
+                        chatHistory[chatId].push({ role: 'assistant', content: botReply });
+
+                        // Send the bot's reply back to WhatsApp
+                        client.sendMessage(chatId, botReply);
+                    } else {
+                        console.error('Error transcribing audio:', result.error);
+                        client.sendMessage(chatId, 'Sorry, I could not transcribe the audio.');
+                    }
+
+                    // Cleanup temp files
+                    fs.unlinkSync(tempFilePath);
+                    fs.unlinkSync(mp3FilePath);
+                })
+                .catch((error) => {
+                    console.error('Error sending audio for transcription:', error);
+                    message.reply('Error sending the audio for transcription.');
+                });
             });
-            
-            const result = await response.json();
-            if (response.ok) {
-                const transcription = result.transcription || 'Sorry, I could not transcribe the audio.';
-                console.log('Transcription:', transcription);
-                
-                // Add the transcription to chat history
-                chatHistory[chatId].push({ role: 'user', content: transcription });
-
-                // Prepare payload for Ollama
-                const payload = {
-                    model: 'llama3.1', // Replace with your specific Ollama model
-                    messages: chatHistory[chatId],
-                };
-
-                // Send transcription to Ollama for response
-                const ollamaResponse = await ollama.chat(payload);
-
-                const botReply = ollamaResponse.message.content || 'Sorry, I could not process your request.';
-                chatHistory[chatId].push({ role: 'assistant', content: botReply });
-
-                // Send the bot's reply back to WhatsApp
-                client.sendMessage(chatId, botReply);
-            } else {
-                console.error('Error transcribing audio:', result.error);
-                client.sendMessage(chatId, 'Sorry, I could not transcribe the audio.');
-            }
         } catch (error) {
             console.error('Error handling voice message:', error);
             message.reply('An error occurred while processing the voice message.');
