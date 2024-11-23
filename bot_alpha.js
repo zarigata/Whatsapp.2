@@ -5,15 +5,18 @@ import fetch from 'node-fetch'; // For sending audio to Python server
 import fs from 'fs';
 import path from 'path';
 
-// ES Module version of __dirname
+// Ensure __dirname is interpreted correctly for ES modules
 const __dirname = new URL('.', import.meta.url).pathname;
 
 const { Client, LocalAuth } = pkg; // Destructure Client and LocalAuth from the imported package
 
-// Directory where audio files will be stored
+// Correct directory path for saving audio files
 const audioDir = path.join(__dirname, 'audio_files');
-if (!fs.existsSync(audioDir)) {
-    fs.mkdirSync(audioDir, { recursive: true });  // Create directory if it doesn't exist
+const parentDir = path.dirname(audioDir);
+
+// Check and create the audio directory
+if (!fs.existsSync(parentDir)) {
+    fs.mkdirSync(parentDir, { recursive: true });
 }
 
 // Initialize Ollama with the correct host
