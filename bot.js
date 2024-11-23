@@ -61,7 +61,7 @@ client.on('message', async (message) => {
 
     // Prepare payload for Ollama
     const payload = {
-        model: 'wizard-vicuna-uncensored', // Replace with your specific Ollama model
+        model: 'vera', // Replace with your specific Ollama model
         messages: chatHistory[chatId],
     };
 
