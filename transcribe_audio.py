@@ -1,31 +1,27 @@
-import sys
+import os
+from flask import Flask, request, jsonify
 import speech_recognition as sr
-from pydub import AudioSegment
 
-# Convert OGG to WAV if needed (because SpeechRecognition works best with WAV files)
-def convert_ogg_to_wav(ogg_path):
-    audio = AudioSegment.from_ogg(ogg_path)
-    wav_path = ogg_path.replace('.ogg', '.wav')
-    audio.export(wav_path, format='wav')
-    return wav_path
+app = Flask(__name__)
 
-def transcribe_audio(audio_path):
+@app.route("/transcribe", methods=["POST"])
+def transcribe_audio():
+    """Endpoint to receive and transcribe audio."""
+    if "audio" not in request.files:
+        return jsonify({"error": "No audio file provided"}), 400
+
+    audio_file = request.files["audio"]
     recognizer = sr.Recognizer()
 
-    # If the audio is in OGG format, convert to WAV first
-    if audio_path.endswith('.ogg'):
-        audio_path = convert_ogg_to_wav(audio_path)
-
-    with sr.AudioFile(audio_path) as source:
-        audio = recognizer.record(source)  # Record the entire audio
-        try:
-            # Recognize speech using Google Speech Recognition in Portuguese
-            print(recognizer.recognize_google(audio, language="pt-BR"))  # Use Brazilian Portuguese
-        except sr.UnknownValueError:
-            print("Google Speech Recognition could not understand the audio")
-        except sr.RequestError as e:
-            print(f"Could not request results from Google Speech Recognition service; {e}")
+    try:
+        with sr.AudioFile(audio_file) as source:
+            audio_data = recognizer.record(source)
+            text = recognizer.recognize_google(audio_data, language="pt-BR")  # Portuguese language
+            return jsonify({"transcription": text})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    audio_file_path = sys.argv[1]
-    transcribe_audio(audio_file_path)
+    port = 5000
+    print(f"Starting transcription server on http://127.0.0.1:{port}")
+    app.run(host="127.0.0.1", port=port)

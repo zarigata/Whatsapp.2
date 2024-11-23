@@ -1,83 +1,144 @@
-import { Client, LocalAuth } from 'whatsapp-web.js';
+import pkg from 'whatsapp-web.js';  // Import as default
+import qrcode from 'qrcode-terminal';
+import { Ollama } from 'ollama'; // Import Ollama class
+import fetch from 'node-fetch'; // For sending audio to Python server
 import fs from 'fs';
-import { exec } from 'child_process';
 import path from 'path';
-import { Ollama } from 'ollama';
 
-// Initialize WhatsApp client
+// ES Module version of __dirname
+const __dirname = new URL('.', import.meta.url).pathname;
+
+const { Client, LocalAuth } = pkg; // Destructure Client and LocalAuth from the imported package
+
+// Directory where audio files will be stored
+const audioDir = path.join(__dirname, 'audio_files');
+if (!fs.existsSync(audioDir)) {
+    fs.mkdirSync(audioDir, { recursive: true });  // Create directory if it doesn't exist
+}
+
+// Initialize Ollama with the correct host
+const ollama = new Ollama({ host: 'http://127.0.0.1:11434' }); // Ollama server URL
+
+// Initialize the WhatsApp client with session persistence
 const client = new Client({
-  authStrategy: new LocalAuth(),
+    authStrategy: new LocalAuth({ dataPath: './session' }) // Saves session
 });
 
-// Store message history (you can tweak the size based on your needs)
-let messageHistory = [];
+// Listen for QR code
+client.on('qr', (qr) => {
+    console.log('Scan the QR Code below to log in:');
+    qrcode.generate(qr, { small: true });
+});
 
-// Ollama client for AI interactions (using your provided host and model)
-const ollama = new Ollama({ host: 'http://192.168.15.115:11434' });
+// Notify when logged in
+client.on('ready', () => {
+    console.log('WhatsApp Bot is ready!');
+});
 
+// History storage
+const chatHistory = {};
+
+// Handle incoming messages
 client.on('message', async (message) => {
-  // Check if the message is a voice message
-  if (message.hasMedia) {
-    // Download the media
-    const media = await message.downloadMedia();
-    const fileName = `voice_message_${message.id.id}.ogg`; // Save as OGG file
-    const filePath = path.join(__dirname, fileName);
+    const chatId = message.from;
+    const text = message.body;
+    const isGroup = chatId.includes('@g.us'); // Ensure this is a group chat
+    
+    // Check if the message contains a mention of the bot
+    const isMentioned = message.mentionedIds && message.mentionedIds.includes(client.info.wid._serialized);
 
-    // Write the media file to disk
-    fs.writeFileSync(filePath, media.data, 'base64');
+    // Debugging: Log the message and mentions array to help troubleshoot
+    console.log('Message:', message);
+    console.log('Mentions:', message.mentionedIds);
+    console.log('Group Mentions:', message.groupMentions);
 
-    console.log(`Received a voice message, saved as ${fileName}`);
-
-    // Call Python script to transcribe the audio
-    exec(`python transcribe_audio.py ${filePath}`, async (err, stdout, stderr) => {
-      if (err) {
-        console.error(`Error: ${stderr}`);
-        message.reply("Sorry, I couldn't process the voice message.");
-        return;
-      }
-
-      console.log(`Transcription result: ${stdout}`);
-      const transcription = stdout.trim();
-
-      // Add the transcription to the message history
-      messageHistory.push({ role: 'user', content: transcription });
-
-      // Limit history to last 5 messages
-      if (messageHistory.length > 5) {
-        messageHistory.shift();
-      }
-
-      // Send the complete history to Ollama for context-based reply
-      const response = await ollama.chat({
-        model: 'vera',  // Use the model "vera"
-        messages: messageHistory,
-      });
-
-      // Reply with the response from Ollama
-      message.reply(response.message.content);
-    });
-  } else {
-    // Regular text message handling
-    messageHistory.push({ role: 'user', content: message.body });
-
-    // Limit history to last 5 messages
-    if (messageHistory.length > 5) {
-      messageHistory.shift();
+    // If the message is from a group and the bot is not mentioned, do not reply
+    if (isGroup && !isMentioned) {
+        console.log('Bot not mentioned in group, ignoring message.');
+        return; // Do nothing
     }
 
-    // Send the complete history to Ollama for context-based reply
-    const response = await ollama.chat({
-      model: 'vera',  // Use the model "vera"
-      messages: messageHistory,
-    });
+    // Initialize chat history if not present
+    if (!chatHistory[chatId]) {
+        chatHistory[chatId] = [];
+    }
 
-    // Reply with the response from Ollama
-    message.reply(response.message.content);
-  }
+    // If the message is an audio message (voice message)
+    if (message.hasMedia && message.type === 'ptt') {
+        try {
+            const media = await message.downloadMedia();
+            const audioFilePath = path.join(audioDir, 'temp_audio.wav');
+            
+            // Save the audio file locally
+            fs.writeFileSync(audioFilePath, media.data, 'base64');
+            console.log('Audio file saved, sending to transcription server...');
+
+            // Send the audio file to the Python server for transcription
+            const response = await fetch('http://127.0.0.1:5000/transcribe', {
+                method: 'POST',
+                body: fs.createReadStream(audioFilePath),
+                headers: {
+                    'Content-Type': 'audio/wav',
+                },
+            });
+            
+            const result = await response.json();
+            if (response.ok) {
+                const transcription = result.transcription || 'Sorry, I could not transcribe the audio.';
+                console.log('Transcription:', transcription);
+                
+                // Add the transcription to chat history
+                chatHistory[chatId].push({ role: 'user', content: transcription });
+
+                // Prepare payload for Ollama
+                const payload = {
+                    model: 'llama3.1', // Replace with your specific Ollama model
+                    messages: chatHistory[chatId],
+                };
+
+                // Send transcription to Ollama for response
+                const ollamaResponse = await ollama.chat(payload);
+
+                const botReply = ollamaResponse.message.content || 'Sorry, I could not process your request.';
+                chatHistory[chatId].push({ role: 'assistant', content: botReply });
+
+                // Send the bot's reply back to WhatsApp
+                client.sendMessage(chatId, botReply);
+            } else {
+                console.error('Error transcribing audio:', result.error);
+                client.sendMessage(chatId, 'Sorry, I could not transcribe the audio.');
+            }
+
+            // Cleanup temp audio file
+            fs.unlinkSync(audioFilePath);
+        } catch (error) {
+            console.error('Error handling voice message:', error);
+            message.reply('An error occurred while processing the voice message.');
+        }
+    } else if (text) {
+        // Regular text message handling (same as before)
+        chatHistory[chatId].push({ role: 'user', content: text });
+
+        if (chatHistory[chatId].length > 6) {
+            chatHistory[chatId] = chatHistory[chatId].slice(-6);
+        }
+
+        const payload = {
+            model: 'llama3.1', // Replace with your specific Ollama model
+            messages: chatHistory[chatId],
+        };
+
+        try {
+            const response = await ollama.chat(payload);
+            const botReply = response.message.content || 'Sorry, I could not process your request.';
+            chatHistory[chatId].push({ role: 'assistant', content: botReply });
+            client.sendMessage(chatId, botReply);
+        } catch (error) {
+            console.error('Error communicating with Ollama server:', error.message);
+            client.sendMessage(chatId, 'Oops! There was an error processing your request.');
+        }
+    }
 });
 
-client.on('ready', () => {
-  console.log('WhatsApp bot is ready!');
-});
-
+// Start the WhatsApp client
 client.initialize();
