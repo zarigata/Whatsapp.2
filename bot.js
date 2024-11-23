@@ -5,7 +5,7 @@ import { Ollama } from 'ollama'; // Import Ollama class
 const { Client, LocalAuth } = pkg; // Destructure Client and LocalAuth from the imported package
 
 // Initialize Ollama with the correct host
-const ollama = new Ollama({ host: 'http://127.0.0.1:11434' }); // Ollama server URL
+const ollama = new Ollama({ host: 'http://192.168.15.115:11434' }); // Ollama server URL
 
 // Initialize the WhatsApp client with session persistence
 const client = new Client({
