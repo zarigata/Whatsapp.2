@@ -5,7 +5,7 @@ import { Ollama } from 'ollama'; // Import Ollama class
 const { Client, LocalAuth } = pkg; // Destructure Client and LocalAuth from the imported package
 
 // Initialize Ollama with the correct host
-const ollama = new Ollama({ host: 'http://127.0.0.1:11434' }); // Ollama server URL
+const ollama = new Ollama({ host: 'http://192.168.15.115:11434' }); // Ollama server URL
 
 // Initialize the WhatsApp client with session persistence
 const client = new Client({
@@ -30,6 +30,15 @@ const chatHistory = {};
 client.on('message', async (message) => {
     const chatId = message.from;
     const text = message.body;
+    const isGroup = message.from.startsWith('g'); // Check if the message is from a group
+    
+    // Check if the message contains a mention of the bot
+    const isMentioned = message.mentions && message.mentions.some(mention => mention.id === client.info.wid._serialized);
+
+    // If the message is from a group and the bot is not mentioned, do not reply
+    if (isGroup && !isMentioned) {
+        return; // Do nothing
+    }
 
     // Initialize chat history if not present
     if (!chatHistory[chatId]) {
@@ -46,7 +55,7 @@ client.on('message', async (message) => {
 
     // Prepare payload for Ollama
     const payload = {
-        model: 'llama3.1', // Replace with your specific Ollama model
+        model: 'ingles', // Replace with your specific Ollama model
         messages: chatHistory[chatId],
     };
 
