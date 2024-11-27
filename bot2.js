@@ -1,6 +1,7 @@
 import pkg from 'whatsapp-web.js'; // Import as default
 import qrcode from 'qrcode-terminal';
 import fs from 'fs';
+import readline from 'readline'; // Import readline for terminal interaction
 import { Ollama } from 'ollama'; // Import Ollama class
 
 const { Client, LocalAuth } = pkg; // Destructure Client and LocalAuth from the imported package
@@ -15,8 +16,7 @@ const ollama = new Ollama({ host: 'http://192.168.15.115:11434' }); // Ollama se
 function ensureConfigFile() {
     if (!fs.existsSync(CONFIG_FILE)) {
         const defaultConfig = {
-            allowedUsers: [], // Array of allowed users
-            models: {} // Map of user IDs to models
+            allowedUsers: {}, // Object mapping user IDs to models
         };
         fs.writeFileSync(CONFIG_FILE, JSON.stringify(defaultConfig, null, 4));
         console.log('Configuration file created.');
@@ -40,16 +40,16 @@ const client = new Client({
     authStrategy: new LocalAuth({ dataPath: './session' }) // Saves session
 });
 
-// Listen for QR code
-client.on('qr', (qr) => {
-    console.log('Scan the QR Code below to log in:');
-    qrcode.generate(qr, { small: true });
+// Readline interface for terminal interaction
+const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
 });
 
-// Notify when logged in
-client.on('ready', () => {
-    console.log('WhatsApp Bot is ready!');
-});
+// Function to ask the user via terminal
+function askTerminalQuestion(question) {
+    return new Promise((resolve) => rl.question(question, resolve));
+}
 
 // Load configuration
 let config = loadConfig();
@@ -64,13 +64,27 @@ client.on('message', async (message) => {
     const isGroup = chatId.includes('@g.us'); // Ensure this is a group chat
 
     // Check if the user is allowed to interact
-    const userAllowed = config.allowedUsers.includes(chatId);
-    const model = config.models[chatId] || 'default';
-
-    if (!userAllowed) {
+    if (!config.allowedUsers[chatId]) {
         console.log(`User ${chatId} is not allowed to interact.`);
-        return; // Do nothing
+
+        // Ask via terminal if the user should be added
+        const answer = await askTerminalQuestion(
+            `User ${chatId} wants to interact with the bot. Add them to the allowed list? (yes/no): `
+        );
+
+        if (answer.toLowerCase() === 'yes') {
+            // Add user with default model
+            config.allowedUsers[chatId] = { model: 'vera' };
+            saveConfig(config);
+            console.log(`User ${chatId} has been added with model "vera".`);
+        } else {
+            console.log(`User ${chatId} was not added.`);
+            return; // Do nothing if not added
+        }
     }
+
+    // Get the model assigned to the user
+    const model = config.allowedUsers[chatId].model || 'vera';
 
     // Check if the message contains a mention of the bot
     const isMentioned = message.mentionedIds && message.mentionedIds.includes(client.info.wid._serialized);
@@ -116,6 +130,17 @@ client.on('message', async (message) => {
         console.error('Error communicating with the Ollama server:', error.message);
         client.sendMessage(chatId, 'Oops! There was an error processing your request.');
     }
+});
+
+// Listen for QR code
+client.on('qr', (qr) => {
+    console.log('Scan the QR Code below to log in:');
+    qrcode.generate(qr, { small: true });
+});
+
+// Notify when logged in
+client.on('ready', () => {
+    console.log('WhatsApp Bot is ready!');
 });
 
 // Start the WhatsApp client
