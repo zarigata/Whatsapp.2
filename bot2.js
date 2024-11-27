@@ -3,42 +3,43 @@ import qrcode from 'qrcode-terminal';
 import fs from 'fs';
 import readline from 'readline'; // Import readline for terminal interaction
 import { Ollama } from 'ollama'; // Import Ollama class
+import { parse, stringify } from 'csv/sync'; // CSV parsing utilities
 
 const { Client, LocalAuth } = pkg; // Destructure Client and LocalAuth from the imported package
 
-// File path for the configuration JSON
-const CONFIG_FILE = './config.json';
+const CSV_FILE = './config.csv'; // CSV file path
+const SAVE_INTERVAL_MS = 60000; // Save to CSV every 60 seconds
 
 // Initialize Ollama with the correct host
 const ollama = new Ollama({ host: 'http://192.168.15.115:11434' }); // Ollama server URL
 
-// Function to ensure the JSON file exists and is correctly formatted
-function ensureConfigFile() {
-    if (!fs.existsSync(CONFIG_FILE)) {
-        const defaultConfig = {
-            allowedUsers: {}, // Object mapping user IDs to models
-        };
-        fs.writeFileSync(CONFIG_FILE, JSON.stringify(defaultConfig, null, 4));
-        console.log('Configuration file created.');
+// Ensure the CSV file exists and create it if necessary
+function ensureCSVFile() {
+    if (!fs.existsSync(CSV_FILE)) {
+        const headers = 'chatId,model\n'; // Define CSV headers
+        fs.writeFileSync(CSV_FILE, headers); // Write headers to the CSV file
+        console.log('CSV configuration file created.');
     }
 }
 
-// Function to load the JSON configuration
-function loadConfig() {
-    ensureConfigFile();
-    const rawData = fs.readFileSync(CONFIG_FILE);
-    return JSON.parse(rawData);
+// Load CSV into memory as a JavaScript object
+function loadCSV() {
+    ensureCSVFile();
+    const rawData = fs.readFileSync(CSV_FILE, 'utf8');
+    const records = parse(rawData, { columns: true, skip_empty_lines: true });
+    return Object.fromEntries(records.map((row) => [row.chatId, { model: row.model }]));
 }
 
-// Function to save the JSON configuration
-function saveConfig(config) {
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 4));
+// Save in-memory data to the CSV file
+function saveCSV(data) {
+    const records = Object.entries(data).map(([chatId, info]) => ({
+        chatId,
+        model: info.model || 'vera',
+    }));
+    const csvContent = stringify(records, { header: true });
+    fs.writeFileSync(CSV_FILE, csvContent);
+    console.log('CSV configuration saved.');
 }
-
-// Initialize WhatsApp client
-const client = new Client({
-    authStrategy: new LocalAuth({ dataPath: './session' }) // Saves session
-});
 
 // Readline interface for terminal interaction
 const rl = readline.createInterface({
@@ -51,8 +52,18 @@ function askTerminalQuestion(question) {
     return new Promise((resolve) => rl.question(question, resolve));
 }
 
-// Load configuration
-let config = loadConfig();
+// Load initial configuration from CSV
+let config = loadCSV();
+
+// Periodically save the configuration to the CSV file
+setInterval(() => {
+    saveCSV(config);
+}, SAVE_INTERVAL_MS);
+
+// Initialize WhatsApp client
+const client = new Client({
+    authStrategy: new LocalAuth({ dataPath: './session' }), // Saves session
+});
 
 // History storage
 const chatHistory = {};
@@ -64,7 +75,7 @@ client.on('message', async (message) => {
     const isGroup = chatId.includes('@g.us'); // Ensure this is a group chat
 
     // Check if the user is allowed to interact
-    if (!config.allowedUsers[chatId]) {
+    if (!config[chatId]) {
         console.log(`User ${chatId} is not allowed to interact.`);
 
         // Ask via terminal if the user should be added
@@ -74,8 +85,7 @@ client.on('message', async (message) => {
 
         if (answer.toLowerCase() === 'yes') {
             // Add user with default model
-            config.allowedUsers[chatId] = { model: 'vera' };
-            saveConfig(config);
+            config[chatId] = { model: 'vera' };
             console.log(`User ${chatId} has been added with model "vera".`);
         } else {
             console.log(`User ${chatId} was not added.`);
@@ -84,7 +94,7 @@ client.on('message', async (message) => {
     }
 
     // Get the model assigned to the user
-    const model = config.allowedUsers[chatId].model || 'vera';
+    const model = config[chatId].model || 'vera';
 
     // Check if the message contains a mention of the bot
     const isMentioned = message.mentionedIds && message.mentionedIds.includes(client.info.wid._serialized);
